@@ -1,0 +1,123 @@
+[
+  {
+    "mapNames": [
+      "1944_Red_Planet"
+    ],
+    "gameNames": [
+      "Spring: 1944 $VERSION"
+    ],
+    "title": "MOAR S44",
+    "minPlayers": 10,
+    "engineVersions": [
+      "99"
+    ],
+    "description": "TACTICS",
+    "maxPlayers": 30,
+    "name": "S44",
+    "teamJoinAllowed": true
+  },
+  {
+    "name": "BADSD1",
+    "minPlayers": 10,
+    "title": "BADSD24/7",
+    "gameNames": [
+      "Balanced Annihilation V8.12"
+    ],
+    "description": "Join the grind",
+    "engineVersions": [
+      "101"
+    ],
+    "mapNames": [
+      "DeltaSiegeDry"
+    ],
+    "teamJoinAllowed": true,
+    "maxPlayers": 30
+  },
+  {
+    "mapNames": [
+      "DeltaSiegeDry"
+    ],
+    "gameNames": [
+      "Balanced Annihilation V8.12"
+    ],
+    "title": "BA 1v1",
+    "minPlayers": 10,
+    "engineVersions": [
+      "101"
+    ],
+    "description": "all day, all night",
+    "maxPlayers": 30,
+    "name": "BADSD2",
+    "teamJoinAllowed": true
+  },
+  {
+    "description": "superior kwalitee",
+    "gameNames": [
+      "Cursed v5"
+    ],
+    "minPlayers": 10,
+    "title": "Cursed",
+    "maxPlayers": 30,
+    "name": "CURSED",
+    "mapNames": [
+      "DeltaSiegeDry"
+    ],
+    "teamJoinAllowed": true,
+    "engineVersions": [
+      "101"
+    ]
+  },
+  {
+    "minPlayers": 10,
+    "engineVersions": [
+      "101"
+    ],
+    "description": "the evolution of RTS",
+    "name": "EVONORMAL",
+    "maxPlayers": 30,
+    "teamJoinAllowed": true,
+    "mapNames": [
+      "DeltaSiegeDry"
+    ],
+    "gameNames": [
+      "EvolutionRTS v1"
+    ],
+    "title": "EvolutionRTS"
+  },
+  {
+    "description": "just some shiny new game",
+    "gameNames": [
+      "My New game v1"
+    ],
+    "minPlayers": 10,
+    "title": "My new game!",
+    "name": "MYGAME",
+    "maxPlayers": 30,
+    "mapNames": [
+      "DeltaSiegeDry"
+    ],
+    "teamJoinAllowed": true,
+    "engineVersions": [
+      "101"
+    ]
+  },
+  {
+    "maxPlayers": 30,
+    "title": "Bunch of games",
+    "minPlayers": 10,
+    "gameNames": [
+      "EvolutionRTS v1",
+      "Balanced Annihilation V8.12",
+      "Cursed 3"
+    ],
+    "description": "endless variety!",
+    "engineVersions": [
+      "101"
+    ],
+    "teamJoinAllowed": true,
+    "mapNames": [
+      "DeltaSiegeDry"
+    ],
+    "name": "MANYGAMES"
+  }
+]
