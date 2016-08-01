@@ -39,9 +39,8 @@ func New() *Matchbot {
 func (m *Matchbot) Start(server string, user string, password string, queuesFile string) {
 	// infinite loop so there's a reconnect if the server shuts off
 	for {
-		var clientWg sync.WaitGroup
 		m.mut.Lock()
-		m.client = client.New(&clientWg)
+		m.client = client.New()
 		m.mut.Unlock()
 
 		// this goroutine will exit when the client terminates
@@ -52,7 +51,6 @@ func (m *Matchbot) Start(server string, user string, password string, queuesFile
 
 		err := m.client.Connect(server)
 		if err == nil {
-			clientWg.Add(1)
 			err = m.client.Login(user, password)
 			if err != nil {
 				log.WithFields(log.Fields{
@@ -61,12 +59,16 @@ func (m *Matchbot) Start(server string, user string, password string, queuesFile
 					"user":  user,
 				}).Warn("client login connection error")
 			}
-			clientWg.Wait()
+			m.client.Done()
 		} else {
-			log.Info("could not connect to spring server: %v", err)
+			log.WithFields(log.Fields{
+				"event": "matchbot.Start",
+				"error": err,
+			}).Info("client could not connect to spring server")
 		}
 
 		close(shutdown)
+
 		m.mut.Lock()
 		m.client = nil
 		m.mut.Unlock()

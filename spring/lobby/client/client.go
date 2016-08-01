@@ -9,20 +9,17 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"net"
-	"sync"
 	"time"
 )
 
 type Client struct {
-	wg     *sync.WaitGroup
 	conn   net.Conn
 	Events chan *protocol.Message
 	exit   chan struct{}
 }
 
-func New(wg *sync.WaitGroup) *Client {
+func New() *Client {
 	return &Client{
-		wg:     wg,
 		Events: make(chan *protocol.Message),
 		exit:   make(chan struct{}),
 	}
@@ -46,6 +43,10 @@ func (c *Client) Disconnect() {
 	time.Sleep(1)
 	close(c.exit)
 	c.conn.Close()
+}
+
+func (c *Client) Done() {
+	<-c.exit
 }
 
 func (c *Client) Login(user string, pass string) error {
@@ -130,7 +131,6 @@ func (c *Client) read() {
 			log.Printf("blorg reading from conn: %v", err)
 			close(c.Events)
 			close(c.exit)
-			c.wg.Done()
 			return
 		}
 
