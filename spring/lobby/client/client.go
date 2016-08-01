@@ -99,16 +99,11 @@ func (c *Client) send(command string, params []string) error {
 		"output": string(raw),
 	}).Debug("OUT")
 
-	written, err := c.conn.Write(raw)
+	_, err := c.conn.Write(raw)
 	if err != nil {
 		c.conn.Close()
 		close(c.exit)
 		return fmt.Errorf("could not send %v:%v to spring server: %v", command, params, err)
-	}
-
-	if written != len(raw) {
-		c.conn.Close()
-		return fmt.Errorf("didn't write enough bytes for command %s and params %v: wrote %v, expected %v", command, params, written, len(raw))
 	}
 
 	return nil
