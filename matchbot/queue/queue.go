@@ -118,6 +118,7 @@ func (q *Queue) populateAPI() {
 			})
 
 			q.Matches <- &Match{
+				Queue:         q.Def.Name,
 				Map:           string(mapName),
 				Game:          string(gameName),
 				EngineVersion: string(engine),

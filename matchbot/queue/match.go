@@ -1,6 +1,7 @@
 package queue
 
 type Match struct {
+	Queue         string
 	Game          string
 	Map           string
 	EngineVersion string
