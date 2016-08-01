@@ -119,17 +119,14 @@ func (c *Client) sendJSON(command string, payload interface{}) error {
 }
 
 func (c *Client) read() {
-	reader := bufio.NewReader(c.conn)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			log.Printf("blorg reading from conn: %v", err)
-			close(c.Events)
-			close(c.exit)
-			return
+	scanner := bufio.NewScanner(c.conn)
+	for scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			log.Printf("trouble reading from conn: %v", err)
+			break
 		}
 
-		msg := protocol.Parse(line)
+		msg := protocol.Parse(scanner.Text())
 
 		log.WithFields(log.Fields{
 			"event":   "read",
@@ -139,6 +136,9 @@ func (c *Client) read() {
 
 		c.Events <- msg
 	}
+
+	close(c.Events)
+	close(c.exit)
 }
 
 func (c *Client) keepAlive() {
