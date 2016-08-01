@@ -41,7 +41,6 @@ func (c *Client) Connect(lobbyServer string) error {
 func (c *Client) Disconnect() {
 	c.send("EXIT", []string{})
 	time.Sleep(1)
-	close(c.exit)
 	c.conn.Close()
 }
 
@@ -102,7 +101,6 @@ func (c *Client) send(command string, params []string) error {
 	_, err := c.conn.Write(raw)
 	if err != nil {
 		c.conn.Close()
-		close(c.exit)
 		return fmt.Errorf("could not send %v:%v to spring server: %v", command, params, err)
 	}
 
