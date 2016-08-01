@@ -89,6 +89,22 @@ func (c *Client) JoinQueueDeny(queue string, users []string, reason string) erro
 	})
 }
 
+func (c *Client) ReadyCheck(queue string, users []string, responseTime int) error {
+	return c.sendJSON("READYCHECK", &protocol.ReadyCheck{
+		Name:         queue,
+		UserNames:    users,
+		ResponseTime: responseTime,
+	})
+}
+
+func (c *Client) ReadyCheckResult(queue string, users []string, status string) error {
+	return c.sendJSON("READYCHECKRESULT", &protocol.ReadyCheckResult{
+		Name:      queue,
+		UserNames: users,
+		Result:    status,
+	})
+}
+
 func (c *Client) send(command string, params []string) error {
 	msg := protocol.Prepare(command, params)
 

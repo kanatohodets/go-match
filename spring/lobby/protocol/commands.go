@@ -23,6 +23,13 @@ type ReadyCheck struct {
 }
 
 type ReadyCheckResponse struct {
+	UserName     string `json:"userName"`
+	Name         string `json:"name"`
+	Response     string `json:"response"`
+	ResponseTime int    `json:"responseTime"`
+}
+
+type ReadyCheckResult struct {
 	UserNames []string `json:"userNames"`
 	Name      string   `json:"name"`
 	Result    string   `json:"result"`
