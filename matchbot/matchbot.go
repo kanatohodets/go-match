@@ -300,6 +300,10 @@ func (m *Matchbot) removePlayers(raw []byte) {
 					"error": err,
 				}).Error("error while removing player from 'wrong' queue (mismatch case)")
 			}
+			// no continue here since it does no significant harm (one more
+			// error) to attempt to remove the player from the requested queue,
+			// plus we'd like to delete them from the 'players' map in either
+			// case.
 		}
 
 		err := queue.RemovePlayer(player)
@@ -324,6 +328,7 @@ func (m *Matchbot) openStaticQueues(queuesFile string) {
 			"file":  queuesFile,
 			"error": err,
 		}).Fatal("could not read static queues file")
+		return
 	}
 
 	var defs []*protocol.QueueDefinition
@@ -334,6 +339,7 @@ func (m *Matchbot) openStaticQueues(queuesFile string) {
 			"file":  queuesFile,
 			"error": err,
 		}).Fatal("could not decode queues file JSON")
+		return
 	}
 
 	for _, def := range defs {
