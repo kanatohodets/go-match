@@ -15,7 +15,7 @@ import (
 // Matchbot represents the primary state of the matchmaker: queues, players, and a lobby client
 type Matchbot struct {
 	// protects against races from SIGINT and the reconnection loop with m.client
-	mut *sync.Mutex
+	mut sync.Mutex
 
 	client  *client.Client
 	queues  map[string]*queue.Queue
@@ -27,7 +27,6 @@ type Matchbot struct {
 // New gets you a fresh matchbot. only expected to be called once per program run.
 func New() *Matchbot {
 	return &Matchbot{
-		mut:     &sync.Mutex{},
 		queues:  make(map[string]*queue.Queue),
 		players: make(map[string]*queue.Queue),
 
