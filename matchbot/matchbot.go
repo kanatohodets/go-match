@@ -15,13 +15,20 @@ import (
 // Matchbot represents the primary state of the matchmaker: queues, players, and a lobby client
 type Matchbot struct {
 	// protects against races from SIGINT and the reconnection loop with m.client
-	mut sync.Mutex
+	clientMut sync.Mutex
+	client    *client.Client
 
-	client  *client.Client
+	shutdown chan struct{}
+
 	queues  map[string]*queue.Queue
 	players map[string]*queue.Queue
 
 	matches chan *queue.Match
+
+	readyMut sync.RWMutex
+	// this will be a bug if there are > 4294967295 concurrent matches in the 'readyCheckSpinner' state.
+	readyID uint32
+	ready   map[uint32]chan *protocol.ReadyCheckResponse
 }
 
 // New gets you a fresh matchbot. only expected to be called once per program run.
@@ -31,6 +38,8 @@ func New() *Matchbot {
 		players: make(map[string]*queue.Queue),
 
 		matches: make(chan *queue.Match),
+
+		ready: make(map[uint32]chan *protocol.ReadyCheckResponse),
 	}
 }
 
@@ -38,15 +47,16 @@ func New() *Matchbot {
 func (m *Matchbot) Start(server string, user string, password string, queuesFile string) {
 	// infinite loop so there's a reconnect if the server shuts off
 	for {
-		m.mut.Lock()
+		m.clientMut.Lock()
 		m.client = client.New()
-		m.mut.Unlock()
+		m.shutdown = make(chan struct{})
+		m.clientMut.Unlock()
 
 		// this goroutine will exit when the client terminates
 		go m.handleServerCommands()
 
-		shutdown := make(chan struct{})
-		go m.matchesToGames(shutdown)
+		// this goroutine will exit when m.shutdown is closed
+		go m.matchesToGames()
 
 		err := m.client.Connect(server)
 		if err == nil {
@@ -66,11 +76,10 @@ func (m *Matchbot) Start(server string, user string, password string, queuesFile
 			}).Info("client could not connect to spring server")
 		}
 
-		close(shutdown)
-
-		m.mut.Lock()
+		m.clientMut.Lock()
+		close(m.shutdown)
 		m.client = nil
-		m.mut.Unlock()
+		m.clientMut.Unlock()
 
 		log.Info("something went wrong with the client: waiting 10 seconds and reconnecting")
 		time.Sleep(10 * time.Second)
@@ -79,10 +88,11 @@ func (m *Matchbot) Start(server string, user string, password string, queuesFile
 
 // Shutdown cleanly terminates the matchbot, closing all hosted queues and gracefully exiting from the spring server
 func (m *Matchbot) Shutdown() {
-	m.mut.Lock()
-	defer m.mut.Unlock()
+	m.clientMut.Lock()
+	defer m.clientMut.Unlock()
 
 	if m.client != nil {
+		close(m.shutdown)
 		for name, _ := range m.queues {
 			m.client.CloseQueue(name)
 		}
@@ -126,7 +136,7 @@ func (m *Matchbot) handleServerCommands() {
 				queue.RemovePlayer(player)
 			}
 		case "READYCHECKRESPONSE":
-			log.Info("ready check response ", string(msg.Data))
+			m.readyCheckResponse(msg.Data)
 
 		// TODO open earlier to avoid racing clients who try to join?
 		case "QUEUEOPENED":
@@ -378,20 +388,92 @@ func (m *Matchbot) addQueue(raw []byte) {
 	m.queues[def.Name] = q
 }
 
-// TODO: ready-check-response cycle, followed by
-// TODO: spring/game/game.go, which takes data here and spawns a server
-func (m *Matchbot) matchesToGames(shutdown chan struct{}) {
+func (m *Matchbot) readyCheckResponse(raw []byte) {
+	var res protocol.ReadyCheckResponse
+	err := json.Unmarshal(raw, &res)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"event": "matchbot.readyCheckResponse",
+			"data":  string(raw),
+			"error": err,
+		}).Error("invalid READYCHECKRESPONSE from server")
+		return
+	}
+
+	m.readyMut.RLock()
+	// broadcast to all readyCheckSpinners
+	for _, ch := range m.ready {
+		ch <- &res
+	}
+	m.readyMut.RUnlock()
+}
+
+func (m *Matchbot) matchesToGames() {
 	for {
 		select {
 		case match := <-m.matches:
-			log.Printf("WHOOHOO MATCH map: %v game %v engine %v", match.Map, match.Game, match.EngineVersion)
-			log.Info("how bout some players??")
-			for _, player := range match.Players {
-				log.Printf("name: %v, team: %v, ally %v", player.Name, player.Team, player.Ally)
+			playerNames := make([]string, len(match.Players))
+			for i, player := range match.Players {
+				playerNames[i] = player.Name
 			}
-		case <-shutdown:
+			// TODO: configurable timeout for user ready check
+			err := m.client.ReadyCheck(match.Queue, playerNames, 10)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"event":   "matchbot.matchesToGames",
+					"error":   err,
+					"players": playerNames,
+					"queue":   match.Queue,
+				}).Warn("error sending ReadyCheck to players, bailing on this match")
+
+				err = m.client.ReadyCheckResult(
+					match.Queue,
+					playerNames,
+					fmt.Sprintf("matchbot error: %v", err),
+				)
+
+				if err != nil {
+					log.WithFields(log.Fields{
+						"event":   "matchbot.matchesToGames",
+						"error":   err,
+						"players": playerNames,
+						"queue":   match.Queue,
+					}).Warn("geez louise, failed to fail ReadyCheckResult after we errored. gah!")
+				}
+				continue
+			}
+
+			// Spawn a goroutine to represent this match.
+			m.readyMut.Lock()
+			m.readyID++
+			ch := make(chan *protocol.ReadyCheckResponse)
+			m.ready[m.readyID] = ch
+			// The goroutine will exit when m.shutdown is closed.
+			go m.readyCheckSpinner(m.readyID, match, ch)
+			m.readyMut.Unlock()
+
+		case <-m.shutdown:
 			return
 		}
 	}
+}
 
+// TODO: terminate spinner once we've heard from all the players in the match
+// TODO: some data structure here to populate state of responses, and then start the game if all good
+// TODO: spring/game/game.go
+func (m *Matchbot) readyCheckSpinner(id uint32, match *queue.Match, ch chan *protocol.ReadyCheckResponse) {
+Listen:
+	for {
+		select {
+		case readyCheckResponse := <-ch:
+
+			log.Info("got a ready check response, yay", readyCheckResponse)
+		case <-m.shutdown:
+			break Listen
+		}
+	}
+
+	m.readyMut.Lock()
+	delete(m.ready, id)
+	m.readyMut.Unlock()
 }
