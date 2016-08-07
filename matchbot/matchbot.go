@@ -60,14 +60,7 @@ func (m *Matchbot) Start(server string, user string, password string, queuesFile
 
 		err := m.client.Connect(server)
 		if err == nil {
-			err = m.client.Login(user, password)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"event": "matchbot.Start",
-					"error": err,
-					"user":  user,
-				}).Warn("client login connection error")
-			}
+			m.client.Login(user, password)
 			m.client.Done()
 		} else {
 			log.WithFields(log.Fields{
@@ -352,14 +345,7 @@ func (m *Matchbot) openStaticQueues(queuesFile string) {
 	}
 
 	for _, def := range defs {
-		err := m.client.OpenQueue(def)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"event": "matchbot.openStaticQueues",
-				"title": def.Title,
-				"error": err,
-			}).Error("client errored while opening queue. bad queue definition?")
-		}
+		m.client.OpenQueue(def)
 	}
 }
 
@@ -417,31 +403,7 @@ func (m *Matchbot) matchesToGames() {
 				playerNames[i] = player.Name
 			}
 			// TODO: configurable timeout for user ready check
-			err := m.client.ReadyCheck(match.Queue, playerNames, 10)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"event":   "matchbot.matchesToGames",
-					"error":   err,
-					"players": playerNames,
-					"queue":   match.Queue,
-				}).Warn("error sending ReadyCheck to players, bailing on this match")
-
-				err = m.client.ReadyCheckResult(
-					match.Queue,
-					playerNames,
-					fmt.Sprintf("matchbot error: %v", err),
-				)
-
-				if err != nil {
-					log.WithFields(log.Fields{
-						"event":   "matchbot.matchesToGames",
-						"error":   err,
-						"players": playerNames,
-						"queue":   match.Queue,
-					}).Warn("geez louise, failed to fail ReadyCheckResult after we errored. gah!")
-				}
-				continue
-			}
+			m.client.ReadyCheck(match.Queue, playerNames, 10)
 
 			// Spawn a goroutine to represent this match.
 			m.readyMut.Lock()
@@ -493,22 +455,12 @@ Listen:
 			}).Debug("got a readycheck response")
 
 			if readyCheck.Response != "ready" {
-				err := m.client.ReadyCheckResult(
+				m.client.ReadyCheckResult(
 					match.Queue,
 					playerNames,
 					fmt.Sprintf("%s responded with status %s", readyCheck.UserName, readyCheck.Response),
 				)
 
-				if err != nil {
-					log.WithFields(log.Fields{
-						"event":   "matchbot.readyCheckSpinner",
-						"error":   err,
-						"status":  readyCheck.Response,
-						"player":  readyCheck.UserName,
-						"players": playerNames,
-						"queue":   match.Queue,
-					}).Warn("failed to send ReadyCheckResult after player bailed!")
-				}
 				break Listen
 			}
 
@@ -527,20 +479,11 @@ Listen:
 			break Listen
 		case <-time.After(10 * time.Second):
 			log.Info("a ready check timed out")
-			err := m.client.ReadyCheckResult(
+			m.client.ReadyCheckResult(
 				match.Queue,
 				playerNames,
 				"timeout waiting for players to ready up",
 			)
-
-			if err != nil {
-				log.WithFields(log.Fields{
-					"event":   "matchbot.readyCheckSpinner",
-					"error":   err,
-					"players": playerNames,
-					"queue":   match.Queue,
-				}).Warn("failed to send ReadyCheckResult after a timeout!")
-			}
 
 			break Listen
 		}

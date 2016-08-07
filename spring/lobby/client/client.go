@@ -5,7 +5,6 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"net"
@@ -48,7 +47,7 @@ func (c *Client) Done() {
 	<-c.exit
 }
 
-func (c *Client) Login(user string, pass string) error {
+func (c *Client) Login(user string, pass string) {
 	hash := md5.Sum([]byte(pass))
 
 	params := []string{
@@ -63,49 +62,49 @@ func (c *Client) Login(user string, pass string) error {
 
 	go c.keepAlive()
 
-	return c.send("LOGIN", params)
+	c.send("LOGIN", params)
 }
 
-func (c *Client) OpenQueue(queueDef *protocol.QueueDefinition) error {
-	return c.sendJSON("OPENQUEUE", queueDef)
+func (c *Client) OpenQueue(queueDef *protocol.QueueDefinition) {
+	c.sendJSON("OPENQUEUE", queueDef)
 }
 
-func (c *Client) CloseQueue(queue string) error {
-	return c.sendJSON("CLOSEQUEUE", &protocol.CloseQueue{Name: queue})
+func (c *Client) CloseQueue(queue string) {
+	c.sendJSON("CLOSEQUEUE", &protocol.CloseQueue{Name: queue})
 }
 
-func (c *Client) JoinQueueAccept(queue string, users []string) error {
-	return c.sendJSON("JOINQUEUEACCEPT", &protocol.JoinQueueAccept{
+func (c *Client) JoinQueueAccept(queue string, users []string) {
+	c.sendJSON("JOINQUEUEACCEPT", &protocol.JoinQueueAccept{
 		Name:      queue,
 		UserNames: users,
 	})
 }
 
-func (c *Client) JoinQueueDeny(queue string, users []string, reason string) error {
-	return c.sendJSON("JOINQUEUEDENY", &protocol.JoinQueueDeny{
+func (c *Client) JoinQueueDeny(queue string, users []string, reason string) {
+	c.sendJSON("JOINQUEUEDENY", &protocol.JoinQueueDeny{
 		Name:      queue,
 		UserNames: users,
 		Reason:    reason,
 	})
 }
 
-func (c *Client) ReadyCheck(queue string, users []string, responseTime int) error {
-	return c.sendJSON("READYCHECK", &protocol.ReadyCheck{
+func (c *Client) ReadyCheck(queue string, users []string, responseTime int) {
+	c.sendJSON("READYCHECK", &protocol.ReadyCheck{
 		Name:         queue,
 		UserNames:    users,
 		ResponseTime: responseTime,
 	})
 }
 
-func (c *Client) ReadyCheckResult(queue string, users []string, status string) error {
-	return c.sendJSON("READYCHECKRESULT", &protocol.ReadyCheckResult{
+func (c *Client) ReadyCheckResult(queue string, users []string, status string) {
+	c.sendJSON("READYCHECKRESULT", &protocol.ReadyCheckResult{
 		Name:      queue,
 		UserNames: users,
 		Result:    status,
 	})
 }
 
-func (c *Client) send(command string, params []string) error {
+func (c *Client) send(command string, params []string) {
 	msg := protocol.Prepare(command, params)
 
 	raw := msg.Bytes()
@@ -116,20 +115,29 @@ func (c *Client) send(command string, params []string) error {
 
 	_, err := c.conn.Write(raw)
 	if err != nil {
+		log.WithFields(log.Fields{
+			"event":   "send",
+			"command": command,
+			"data":    params,
+			"error":   err,
+		}).Warn("error sending to spring server")
 		c.conn.Close()
-		return fmt.Errorf("could not send %v:%v to spring server: %v", command, params, err)
 	}
-
-	return nil
 }
 
-func (c *Client) sendJSON(command string, payload interface{}) error {
+func (c *Client) sendJSON(command string, payload interface{}) {
 	b, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("error encoding payload into JSON: %v", err)
+		log.WithFields(log.Fields{
+			"event":   "sendJSON",
+			"command": command,
+			"payload": payload,
+			"error":   err,
+		}).Error("could not encode sendJSON payload")
+		return
 	}
 
-	return c.send(command, []string{string(b)})
+	c.send(command, []string{string(b)})
 }
 
 func (c *Client) read() {
