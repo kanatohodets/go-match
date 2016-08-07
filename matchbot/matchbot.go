@@ -462,13 +462,86 @@ func (m *Matchbot) matchesToGames() {
 // TODO: some data structure here to populate state of responses, and then start the game if all good
 // TODO: spring/game/game.go
 func (m *Matchbot) readyCheckSpinner(id uint32, match *queue.Match, ch chan *protocol.ReadyCheckResponse) {
+	playerNames := make([]string, len(match.Players))
+	playerReadyStatus := make(map[string]bool)
+	requiredReady := len(match.Players)
+	seenReady := 0
+	for i, player := range match.Players {
+		playerNames[i] = player.Name
+		playerReadyStatus[player.Name] = false
+	}
+
 Listen:
 	for {
 		select {
-		case readyCheckResponse := <-ch:
+		case readyCheck := <-ch:
+			if readyCheck.Name != match.Queue {
+				continue
+			}
 
-			log.Info("got a ready check response, yay", readyCheckResponse)
+			readied, ok := playerReadyStatus[readyCheck.UserName]
+			if !ok {
+				log.Info("got a ready for a player we don't care about")
+				continue
+			}
+
+			log.WithFields(log.Fields{
+				"event":           "matchbot.readyCheckSpinner",
+				"player":          readyCheck.UserName,
+				"status":          readyCheck.Response,
+				"already_readied": readied,
+			}).Debug("got a readycheck response")
+
+			if readyCheck.Response != "ready" {
+				err := m.client.ReadyCheckResult(
+					match.Queue,
+					playerNames,
+					fmt.Sprintf("%s responded with status %s", readyCheck.UserName, readyCheck.Response),
+				)
+
+				if err != nil {
+					log.WithFields(log.Fields{
+						"event":   "matchbot.readyCheckSpinner",
+						"error":   err,
+						"status":  readyCheck.Response,
+						"player":  readyCheck.UserName,
+						"players": playerNames,
+						"queue":   match.Queue,
+					}).Warn("failed to send ReadyCheckResult after player bailed!")
+				}
+				break Listen
+			}
+
+			// protect against a single player sending 'ready' many times
+			if !readied {
+				seenReady++
+				playerReadyStatus[readyCheck.UserName] = true
+			}
+
+			if seenReady == requiredReady {
+				log.Info("woo, start that game")
+				break Listen
+			}
+
 		case <-m.shutdown:
+			break Listen
+		case <-time.After(10 * time.Second):
+			log.Info("a ready check timed out")
+			err := m.client.ReadyCheckResult(
+				match.Queue,
+				playerNames,
+				"timeout waiting for players to ready up",
+			)
+
+			if err != nil {
+				log.WithFields(log.Fields{
+					"event":   "matchbot.readyCheckSpinner",
+					"error":   err,
+					"players": playerNames,
+					"queue":   match.Queue,
+				}).Warn("failed to send ReadyCheckResult after a timeout!")
+			}
+
 			break Listen
 		}
 	}
