@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/matchbot/queue"
+	"github.com/kanatohodets/go-match/spring/game"
 	"github.com/kanatohodets/go-match/spring/lobby/client"
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"io/ioutil"
@@ -471,7 +472,7 @@ Listen:
 			}
 
 			if seenReady == requiredReady {
-				log.Info("woo, start that game")
+				go game.StartGame(match)
 				break Listen
 			}
 
