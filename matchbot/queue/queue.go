@@ -5,10 +5,13 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"github.com/yuin/gopher-lua"
+	"sync"
+	"time"
 )
 
 type Queue struct {
 	L       *lua.LState
+	LMut    sync.Mutex
 	players map[string]*Player
 	Def     *protocol.QueueDefinition
 	Matches chan<- *Match
@@ -25,18 +28,22 @@ func NewQueue(def *protocol.QueueDefinition, matches chan<- *Match) (*Queue, err
 	q.populateAPI()
 	// TODO: populate this from config/KV store
 	err := q.L.DoFile("example/lua/bozo_1v1.lua")
+	go q.luaUpdateCallin()
 	return q, err
 }
 
 func (q *Queue) populateAPI() {
+	q.LMut.Lock()
+	defer q.LMut.Unlock()
+
 	queueNamespace := q.L.NewTable()
 	// TODO: perhaps pull these out of here, get them access to q some other way
 	q.L.SetFuncs(queueNamespace, map[string]lua.LGFunction{
-		"Title": func(L *lua.LState) int {
+		"GetTitle": func(L *lua.LState) int {
 			q.L.Push(lua.LString(q.Def.Title))
 			return 1
 		},
-		"ListPlayers": func(L *lua.LState) int {
+		"GetPlayerList": func(L *lua.LState) int {
 			tab := L.NewTable()
 			for name, _ := range q.players {
 				tab.Append(lua.LString(name))
@@ -44,7 +51,7 @@ func (q *Queue) populateAPI() {
 			q.L.Push(tab)
 			return 1
 		},
-		"ListMaps": func(L *lua.LState) int {
+		"GetMapList": func(L *lua.LState) int {
 			tab := L.NewTable()
 			for _, mapName := range q.Def.MapNames {
 				tab.Append(lua.LString(mapName))
@@ -52,7 +59,7 @@ func (q *Queue) populateAPI() {
 			q.L.Push(tab)
 			return 1
 		},
-		"ListGames": func(L *lua.LState) int {
+		"GetGameList": func(L *lua.LState) int {
 			tab := L.NewTable()
 			for _, gameName := range q.Def.GameNames {
 				tab.Append(lua.LString(gameName))
@@ -138,6 +145,9 @@ func (q *Queue) AddPlayer(name string) error {
 	player := NewPlayer(name)
 	q.players[name] = player
 
+	q.LMut.Lock()
+	defer q.LMut.Unlock()
+
 	callin, err := q.getLuaCallin("PlayerJoined")
 	if err != nil {
 		return fmt.Errorf("queue.AddPlayer: cannot get lua callin %v: %v", "PlayerJoined", err)
@@ -163,6 +173,9 @@ func (q *Queue) RemovePlayer(name string) error {
 		return fmt.Errorf("queue.RemovePlayer: asked to remove player who is not in the queue")
 	}
 
+	q.LMut.Lock()
+	defer q.LMut.Unlock()
+
 	callin, err := q.getLuaCallin("PlayerLeft")
 	if err != nil {
 		return fmt.Errorf("queue.RemovePlayer: cannot get lua callin %v: %v", "PlayerLeft", err)
@@ -179,6 +192,30 @@ func (q *Queue) RemovePlayer(name string) error {
 	}
 
 	return nil
+}
+
+func (q *Queue) luaUpdateCallin() {
+	startTime := time.Now()
+	for {
+		q.LMut.Lock()
+		callin, err := q.getLuaCallin("Update")
+		if err != nil {
+			log.Error("queue.RemovePlayer: cannot get lua callin %v: %v", "PlayerLeft", err)
+			q.LMut.Unlock()
+			continue
+		}
+
+		elapsedSeconds := int(time.Since(startTime).Seconds())
+
+		err = q.L.CallByParam(lua.P{
+			Fn:      callin,
+			NRet:    0,
+			Protect: true,
+		}, lua.LNumber(elapsedSeconds))
+
+		q.LMut.Unlock()
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func (q *Queue) getLuaCallin(name string) (*lua.LFunction, error) {
