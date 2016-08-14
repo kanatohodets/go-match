@@ -369,7 +369,9 @@ func (m *Matchbot) addQueue(raw []byte) {
 		return
 	}
 
+	m.queueMut.Lock()
 	m.queues[def.Name] = q
+	m.queueMut.Unlock()
 }
 
 func (m *Matchbot) readyCheckResponse(raw []byte) {
