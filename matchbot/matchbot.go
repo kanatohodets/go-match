@@ -415,9 +415,6 @@ func (m *Matchbot) matchesToGames() {
 	}
 }
 
-// TODO: terminate spinner once we've heard from all the players in the match
-// TODO: some data structure here to populate state of responses, and then start the game if all good
-// TODO: spring/game/game.go
 func (m *Matchbot) readyCheckSpinner(id uint32, match *queue.Match, ch chan *protocol.ReadyCheckResponse) {
 	playerNames := make([]string, len(match.Players))
 	playerReadyStatus := make(map[string]bool)
@@ -475,7 +472,20 @@ Listen:
 			}
 
 			if seenReady == requiredReady {
-				go game.StartGame(match)
+				log.WithFields(log.Fields{
+					"event":    "matchbot.readyCheckSpinner",
+					"queue":    match.QueueName,
+					"match_id": match.Id,
+					"players":  playerNames,
+				}).Info("ready check complete, starting game")
+
+				m.client.ReadyCheckResult(
+					match.QueueName,
+					playerNames,
+					"pass",
+				)
+
+				go game.StartGame(m.client, match)
 				break Listen
 			}
 
