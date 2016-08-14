@@ -16,13 +16,13 @@ import (
 // Matchbot represents the primary state of the matchmaker: queues, players, and a lobby client
 type Matchbot struct {
 	// protects against races from SIGINT and the reconnection loop with m.client
-	clientMut sync.Mutex
-	client    *client.Client
+	client *client.Client
 
 	shutdown chan struct{}
 
-	queues  map[string]*queue.Queue
-	players map[string]*queue.Queue
+	queueMut sync.Mutex
+	queues   map[string]*queue.Queue
+	players  map[string]*queue.Queue
 
 	matches chan *queue.Match
 
@@ -38,7 +38,10 @@ func New() *Matchbot {
 		queues:  make(map[string]*queue.Queue),
 		players: make(map[string]*queue.Queue),
 
-		matches: make(chan *queue.Match),
+		matches:  make(chan *queue.Match),
+		shutdown: make(chan struct{}),
+
+		client: client.New(),
 
 		ready: make(map[uint32]chan *protocol.ReadyCheckResponse),
 	}
@@ -46,23 +49,20 @@ func New() *Matchbot {
 
 // Start starts and maintains a matchbot's connection to the spring server
 func (m *Matchbot) Start(server string, user string, password string, queuesFile string) {
+	// this goroutine will exit when m.shutdown is closed
+	go m.matchesToGames()
+
 	// infinite loop so there's a reconnect if the server shuts off
 	for {
-		m.clientMut.Lock()
-		m.client = client.New()
-		m.shutdown = make(chan struct{})
-		m.clientMut.Unlock()
-
-		// this goroutine will exit when the client terminates
-		go m.handleServerCommands()
-
-		// this goroutine will exit when m.shutdown is closed
-		go m.matchesToGames()
-
 		err := m.client.Connect(server)
 		if err == nil {
+			// this goroutine will exit when the client terminates
+			go m.handleServerCommands(m.client.Events)
 			m.client.Login(user, password)
+
+			// blocks until the client terminates
 			m.client.Done()
+			log.Info("client closed connection")
 		} else {
 			log.WithFields(log.Fields{
 				"event": "matchbot.Start",
@@ -70,32 +70,26 @@ func (m *Matchbot) Start(server string, user string, password string, queuesFile
 			}).Info("client could not connect to spring server")
 		}
 
-		m.clientMut.Lock()
-		close(m.shutdown)
-		m.client = nil
-		m.clientMut.Unlock()
-
-		log.Info("something went wrong with the client: waiting 10 seconds and reconnecting")
 		time.Sleep(10 * time.Second)
 	}
 }
 
 // Shutdown cleanly terminates the matchbot, closing all hosted queues and gracefully exiting from the spring server
 func (m *Matchbot) Shutdown() {
-	m.clientMut.Lock()
-	defer m.clientMut.Unlock()
-
-	if m.client != nil {
-		close(m.shutdown)
+	close(m.shutdown)
+	if m.client.Active() {
+		m.queueMut.Lock()
 		for name, _ := range m.queues {
 			m.client.CloseQueue(name)
 		}
+		m.queueMut.Unlock()
+
 		m.client.Disconnect()
 	}
 }
 
-func (m *Matchbot) handleServerCommands() {
-	for msg := range m.client.Events {
+func (m *Matchbot) handleServerCommands(events chan *protocol.Message) {
+	for msg := range events {
 		switch msg.Command {
 
 		// commands we don't care about

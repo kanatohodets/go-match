@@ -8,6 +8,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -15,13 +16,18 @@ type Client struct {
 	conn   net.Conn
 	Events chan *protocol.Message
 	exit   chan struct{}
+	active bool
+	mut    sync.RWMutex
 }
 
 func New() *Client {
-	return &Client{
-		Events: make(chan *protocol.Message),
-		exit:   make(chan struct{}),
-	}
+	return &Client{}
+}
+
+func (c *Client) Active() bool {
+	c.mut.RLock()
+	defer c.mut.RUnlock()
+	return c.active
 }
 
 func (c *Client) Connect(lobbyServer string) error {
@@ -30,8 +36,14 @@ func (c *Client) Connect(lobbyServer string) error {
 		return err
 	}
 
+	c.mut.Lock()
+	c.exit = make(chan struct{})
 	c.conn = conn
+	c.Events = make(chan *protocol.Message)
+	c.active = true
+	c.mut.Unlock()
 
+	// c.exit is closed by 'read' when the socket closes
 	go c.read()
 
 	return nil
@@ -39,7 +51,7 @@ func (c *Client) Connect(lobbyServer string) error {
 
 func (c *Client) Disconnect() {
 	c.send("EXIT", []string{})
-	time.Sleep(1)
+	// this closes the scanner in 'read', which closes c.exit
 	c.conn.Close()
 }
 
@@ -60,6 +72,7 @@ func (c *Client) Login(user string, pass string) {
 		"sp cl p",
 	}
 
+	// this exits when 'Active' is no longer true.
 	go c.keepAlive()
 
 	c.send("LOGIN", params)
@@ -169,18 +182,20 @@ func (c *Client) read() {
 		c.Events <- msg
 	}
 
+	c.mut.Lock()
+	c.active = false
 	close(c.Events)
 	close(c.exit)
+	c.mut.Unlock()
 }
 
 func (c *Client) keepAlive() {
 	for {
-		select {
-		case <-c.exit:
-			return
-
-		case <-time.After(20 * time.Second):
+		if c.Active() {
+			time.Sleep(20 * time.Second)
 			c.send("PING", nil)
+		} else {
+			break
 		}
 	}
 }
