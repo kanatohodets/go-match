@@ -20,7 +20,7 @@ func main() {
 	signal.Notify(c, os.Interrupt)
 	<-c
 
-	fmt.Printf("exiting ...\n")
+	fmt.Println("exiting gracefully...")
 	matchbot.Shutdown()
-	os.Exit(1)
+	os.Exit(0)
 }
