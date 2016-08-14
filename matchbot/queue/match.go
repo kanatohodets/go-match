@@ -1,15 +1,10 @@
 package queue
 
 type Match struct {
-	Queue         string
+	Id            uint64
+	QueueName     string
 	Game          string
 	Map           string
 	EngineVersion string
-	Players       []*MatchedPlayer
-}
-
-type MatchedPlayer struct {
-	Name string
-	Team int
-	Ally int
+	Players       []*Player
 }

@@ -6,15 +6,21 @@ import (
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"github.com/yuin/gopher-lua"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type Queue struct {
-	L       *lua.LState
-	LMut    sync.Mutex
-	players map[string]*Player
+	L    *lua.LState
+	LMut sync.Mutex
+
+	playersMut sync.Mutex
+	players    map[string]*Player
+
 	Def     *protocol.QueueDefinition
 	Matches chan<- *Match
+
+	matchId uint64
 }
 
 func NewQueue(def *protocol.QueueDefinition, matches chan<- *Match) (*Queue, error) {
@@ -23,13 +29,20 @@ func NewQueue(def *protocol.QueueDefinition, matches chan<- *Match) (*Queue, err
 		Def:     def,
 		players: make(map[string]*Player),
 		Matches: matches,
+
+		matchId: 0, // yes, it defaults to zero, but TODO: read from KV store
 	}
 
 	q.populateAPI()
 	// TODO: populate this from config/KV store
-	err := q.L.DoFile("example/lua/bozo_1v1.lua")
+	file := "example/lua/bozo_1v1.lua"
+	err := q.L.DoFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("could not load %v: %v", file, err)
+	}
+
 	go q.luaUpdateCallin()
-	return q, err
+	return q, nil
 }
 
 func (q *Queue) populateAPI() {
@@ -45,8 +58,12 @@ func (q *Queue) populateAPI() {
 		},
 		"GetPlayerList": func(L *lua.LState) int {
 			tab := L.NewTable()
-			for name, _ := range q.players {
-				tab.Append(lua.LString(name))
+			q.playersMut.Lock()
+			defer q.playersMut.Unlock()
+			for name, player := range q.players {
+				if player.Status() == Waiting {
+					tab.Append(lua.LString(name))
+				}
 			}
 			q.L.Push(tab)
 			return 1
@@ -96,40 +113,60 @@ func (q *Queue) populateAPI() {
 				return 0
 			}
 
-			players := []*MatchedPlayer{}
-			playersTable.ForEach(func(_ lua.LValue, player lua.LValue) {
+			q.playersMut.Lock()
+			defer q.playersMut.Unlock()
+
+			matchPlayers := []*Player{}
+			errors := []string{}
+			playersTable.ForEach(func(i lua.LValue, player lua.LValue) {
+
 				// TODO validate
 				name, ok := L.GetField(player, "name").(lua.LString)
 				if !ok {
-					log.Warn("omg bad")
+					errors = append(errors, fmt.Sprintf("player %d did not have a name defined", i))
+					return
+				}
+
+				queuePlayer, ok := q.players[string(name)]
+				if !ok {
+					errors = append(errors, fmt.Sprintf("player %s is not in the queue!", name))
+					return
+				}
+
+				if queuePlayer.Status() != Waiting {
+					errors = append(errors, fmt.Sprintf("player %s is not status waiting!", name))
 					return
 				}
 
 				team, ok := L.GetField(player, "team").(lua.LNumber)
 				if !ok {
-					log.Warn("omg bad")
+					errors = append(errors, fmt.Sprintf("player %s does not have a team!", name))
 					return
 				}
 
 				allyTeam, ok := L.GetField(player, "ally").(lua.LNumber)
 				if !ok {
-					log.Warn("omg bad")
+					errors = append(errors, fmt.Sprintf("player %s does not have an allyteam!", name))
 					return
 				}
 
-				players = append(players, &MatchedPlayer{
-					Name: string(name),
-					Team: int(team),
-					Ally: int(allyTeam),
-				})
+				queuePlayer.SetMatched(int(team), int(allyTeam))
+
+				matchPlayers = append(matchPlayers, queuePlayer)
 			})
 
+			if len(errors) > 0 {
+				log.Warn("bailing on this match, errors present, %v", errors)
+				return 0
+			}
+
 			q.Matches <- &Match{
-				Queue:         q.Def.Name,
+				Id:            q.newMatchId(),
+				QueueName:     q.Def.Name,
 				Map:           string(mapName),
 				Game:          string(gameName),
 				EngineVersion: string(engine),
-				Players:       players,
+				Players:       matchPlayers,
 			}
 
 			return 0
@@ -143,10 +180,12 @@ func (q *Queue) populateAPI() {
 // AddPlayer adds a player to the queue, triggering the queue.PlayerJoined Lua callback.
 func (q *Queue) AddPlayer(name string) error {
 	player := NewPlayer(name)
-	q.players[name] = player
 
 	q.LMut.Lock()
 	defer q.LMut.Unlock()
+
+	// protected by the LMut
+	q.players[name] = player
 
 	callin, err := q.getLuaCallin("PlayerJoined")
 	if err != nil {
@@ -176,6 +215,9 @@ func (q *Queue) RemovePlayer(name string) error {
 	q.LMut.Lock()
 	defer q.LMut.Unlock()
 
+	// protected by the LMut
+	delete(q.players, name)
+
 	callin, err := q.getLuaCallin("PlayerLeft")
 	if err != nil {
 		return fmt.Errorf("queue.RemovePlayer: cannot get lua callin %v: %v", "PlayerLeft", err)
@@ -200,7 +242,7 @@ func (q *Queue) luaUpdateCallin() {
 		q.LMut.Lock()
 		callin, err := q.getLuaCallin("Update")
 		if err != nil {
-			log.Error("queue.RemovePlayer: cannot get lua callin %v: %v", "PlayerLeft", err)
+			log.Error("queue.RemovePlayer: cannot get lua callin %v: %v", "Update", err)
 			q.LMut.Unlock()
 			continue
 		}
@@ -228,4 +270,8 @@ func (q *Queue) getLuaCallin(name string) (*lua.LFunction, error) {
 	}
 
 	return callin, nil
+}
+
+func (q *Queue) newMatchId() uint64 {
+	return atomic.AddUint64(&q.matchId, 1)
 }

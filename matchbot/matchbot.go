@@ -398,7 +398,7 @@ func (m *Matchbot) matchesToGames() {
 				playerNames[i] = player.Name
 			}
 			// TODO: configurable timeout for user ready check
-			m.client.ReadyCheck(match.Queue, playerNames, 10)
+			m.client.ReadyCheck(match.QueueName, playerNames, 10)
 
 			// Spawn a goroutine to represent this match.
 			m.readyMut.Lock()
@@ -428,11 +428,18 @@ func (m *Matchbot) readyCheckSpinner(id uint32, match *queue.Match, ch chan *pro
 		playerReadyStatus[player.Name] = false
 	}
 
+	log.WithFields(log.Fields{
+		"event":    "matchbot.readyCheckSpinner",
+		"queue":    match.QueueName,
+		"match_id": match.Id,
+		"players":  playerNames,
+	}).Info("Entering readyCheck spinner")
+
 Listen:
 	for {
 		select {
 		case readyCheck := <-ch:
-			if readyCheck.Name != match.Queue {
+			if readyCheck.Name != match.QueueName {
 				continue
 			}
 
@@ -446,12 +453,14 @@ Listen:
 				"event":           "matchbot.readyCheckSpinner",
 				"player":          readyCheck.UserName,
 				"status":          readyCheck.Response,
+				"queue":           match.QueueName,
+				"match_id":        match.Id,
 				"already_readied": readied,
 			}).Debug("got a readycheck response")
 
 			if readyCheck.Response != "ready" {
 				m.client.ReadyCheckResult(
-					match.Queue,
+					match.QueueName,
 					playerNames,
 					fmt.Sprintf("%s responded with status %s", readyCheck.UserName, readyCheck.Response),
 				)
@@ -475,7 +484,7 @@ Listen:
 		case <-time.After(10 * time.Second):
 			log.Info("a ready check timed out")
 			m.client.ReadyCheckResult(
-				match.Queue,
+				match.QueueName,
 				playerNames,
 				"timeout waiting for players to ready up",
 			)
