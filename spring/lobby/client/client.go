@@ -104,6 +104,16 @@ func (c *Client) ReadyCheckResult(queue string, users []string, status string) {
 	})
 }
 
+func (c *Client) ConnectUser(user string, ip string, port string, password string, engine string) {
+	c.sendJSON("CONNECTUSER", &protocol.ConnectUser{
+		UserName: user,
+		IP:       ip,
+		Port:     port,
+		Password: password,
+		Engine:   engine,
+	})
+}
+
 func (c *Client) send(command string, params []string) {
 	msg := protocol.Prepare(command, params)
 

@@ -36,11 +36,11 @@ type ReadyCheckResult struct {
 }
 
 type ConnectUser struct {
-	UserName []string `json:"userName"`
-	IP       string   `json:"ip"`
-	Port     string   `json:"port"`
-	Password string   `json:"password"`
-	Engine   string   `json:"engine"`
+	UserName string `json:"userName"`
+	IP       string `json:"ip"`
+	Port     string `json:"port"`
+	Password string `json:"password"`
+	Engine   string `json:"engine"`
 }
 
 type OpenQueue struct {
