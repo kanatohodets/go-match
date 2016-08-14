@@ -105,9 +105,12 @@ func (m *Matchbot) handleServerCommands(events chan *protocol.Message) {
 			continue
 		case "OPENQUEUE":
 			continue
-		case "ACCEPTED":
-			continue
 
+		// login flow
+		case "ACCEPTED":
+			log.WithFields(log.Fields{
+				"event": "matchbot.handleServerCommands",
+			}).Info("successfully logged in")
 		case "LOGININFOEND":
 			//TODO(btyler) config-ify filename; save in KV store, set in web interface???
 			m.openStaticQueues("example/queue.json")
@@ -360,8 +363,8 @@ func (m *Matchbot) addQueue(raw []byte) {
 	if err != nil {
 		log.WithFields(log.Fields{
 			"event": "matchbot.addQueue",
+			"queue": def.Name,
 			"error": err,
-			"data":  string(raw),
 		}).Warn("failed to instantiate new queue")
 		return
 	}
