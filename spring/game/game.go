@@ -5,65 +5,165 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/matchbot/queue"
-	"github.com/kanatohodets/go-match/spring/lobby/client"
+	"io"
 	"math/rand"
 	"net"
 	"os"
 	"os/exec"
+	"sync"
 	"text/template"
 	"time"
 )
 
 // Game represents a single running spring-dedicated server instance
 type Game struct {
-	client *client.Client
+	// these could be structured to be passed in to each function, but
+	// attaching them to the struct is very handy for reporting
+	Match   *queue.Match
+	GameDir string
+	Script  *startScript
 
-	Match       *queue.Match
-	StartScript *startScript
-
+	cmd      *exec.Cmd
+	stdout   io.ReadCloser
+	stderr   io.ReadCloser
 	shutdown chan struct{}
 }
 
-//TODO: proper structs, fill in the teams/allyteams/players correctly
-func StartGame(client *client.Client, match *queue.Match) {
-	port, err := openPort()
+func New(match *queue.Match) *Game {
+	return &Game{
+		Match: match,
+	}
+}
+
+func (g *Game) Shutdown() error {
+	close(g.shutdown)
+	return g.cmd.Process.Signal(os.Interrupt)
+}
+
+func (g *Game) Kill() error {
+	close(g.shutdown)
+	return g.cmd.Process.Kill()
+}
+
+func (g *Game) Start() error {
+	err := g.prepareScript()
+	if err != nil {
+		return fmt.Errorf("game.Start: couldn't prepare startscript: %v", err)
+	}
+
+	spring, err := exec.LookPath("spring-dedicated")
+	if err != nil {
+		return fmt.Errorf("game.Start: couldn't find spring-dedicated: %v", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("game.Start: couldn't get a path for the working dir: %v", err)
+	}
+
+	scriptFile := fmt.Sprintf("%s/%s/startscript.txt", wd, g.GameDir)
+
+	cmd := &exec.Cmd{
+		Path: spring,
+		Args: []string{"", scriptFile},
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("game.Start: couldn't get stdout pipe: %v", err)
+	}
+	g.stdout = stdout
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("game.Start: couldn't get stderr pipe: %v", err)
+	}
+	g.stderr = stderr
+
+	//TODO: set up the autohost interface listener
+
+	err = cmd.Start()
+	if err != nil {
+		return fmt.Errorf("game.Start: couldn't start spring-dedicated: %v", err)
+	}
+
+	g.cmd = cmd
+
+	return nil
+}
+
+func (g *Game) Wait() {
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	stdoutScanner := bufio.NewScanner(g.stdout)
+	go func() {
+		for stdoutScanner.Scan() {
+			text := stdoutScanner.Text()
+			log.WithFields(log.Fields{
+				"event":    "spring",
+				"queue":    g.Match.QueueName,
+				"match_id": g.Match.Id,
+				"text":     text,
+			}).Debug("Spring stdout")
+		}
+		wg.Done()
+	}()
+
+	wg.Add(1)
+	stderrScanner := bufio.NewScanner(g.stderr)
+	go func() {
+		for stderrScanner.Scan() {
+			text := stderrScanner.Text()
+			log.WithFields(log.Fields{
+				"event":    "spring",
+				"queue":    g.Match.QueueName,
+				"match_id": g.Match.Id,
+				"text":     text,
+			}).Warn("Spring stderr")
+		}
+		wg.Done()
+	}()
+
+	wg.Wait()
+	err := g.cmd.Wait()
 	if err != nil {
 		log.WithFields(log.Fields{
-			"event":    "game.StartGame",
-			"queue":    match.QueueName,
-			"match_id": match.Id,
-			"error":    err,
-		}).Error("could not get open port to host game, bailing out")
-		//TODO tell players to go away
-		return
+			"event": "game.StartGame",
+			"error": err,
+		}).Error("spring-dedicated exited with an error")
+	}
+
+	//TODO: game over, put players back in queue?
+	log.WithFields(log.Fields{
+		"event": "game.StartGame",
+	}).Info("game all done@!!!")
+}
+
+func (g *Game) prepareScript() error {
+	port, err := openPort()
+	if err != nil {
+		return err
 	}
 
 	hostPort, err := openPort()
 	if err != nil {
-		log.WithFields(log.Fields{
-			"event":    "game.StartGame",
-			"queue":    match.QueueName,
-			"match_id": match.Id,
-			"error":    err,
-		}).Error("could not get open HostPort to communicate with game, bailing out")
-		//TODO tell players to go away
-		return
+		return err
 	}
 
 	script := &startScript{
 		IP:           "127.0.0.1",
 		Engine:       "103.0",
 		Port:         port,
-		Game:         match.Game,
+		Game:         g.Match.Game,
 		AutoHostPort: hostPort,
-		Map:          match.Map,
+		Map:          g.Match.Map,
 
 		AllyTeams: map[int]*scriptAllyTeam{},
 		Teams:     map[int]*scriptTeam{},
-		Players:   make([]*scriptPlayer, len(match.Players)),
+		Players:   make([]*scriptPlayer, len(g.Match.Players)),
 	}
 
-	for i, p := range match.Players {
+	for i, p := range g.Match.Players {
 		script.Players[i] = &scriptPlayer{
 			Id:   i,
 			Name: p.Name,
@@ -77,8 +177,8 @@ func StartGame(client *client.Client, match *queue.Match) {
 			if t.AllyTeam != p.Game.AllyTeam {
 				log.WithFields(log.Fields{
 					"event":            "game.StartGame",
-					"queue":            match.QueueName,
-					"match_id":         match.Id,
+					"queue":            g.Match.QueueName,
+					"match_id":         g.Match.Id,
 					"team_id":          t.Id,
 					"player_ally_team": p.Game.AllyTeam,
 					"team_ally_team":   t.AllyTeam,
@@ -103,121 +203,21 @@ func StartGame(client *client.Client, match *queue.Match) {
 	}
 
 	prefix := "games"
-	path := fmt.Sprintf("%s/%s/%d", prefix, match.QueueName, time.Now().Unix())
-	err = generateStartScript(path, script, match)
+	path := fmt.Sprintf("%s/%s/%d", prefix, g.Match.QueueName, time.Now().Unix())
+
+	g.GameDir = path
+
+	err = generateStartScript(path, script)
 	if err != nil {
-		log.WithFields(log.Fields{
-			"event":    "game.StartGame",
-			"error":    err,
-			"queue":    match.QueueName,
-			"match_id": match.Id,
-			"path":     path,
-		}).Error("could not create startscript")
-		//TODO tell players to go away
-		return
+		return fmt.Errorf("game.PrepareScript: could not create startscript: %v", err)
 	}
 
-	spring, err := exec.LookPath("spring-dedicated")
-	if err != nil {
-		log.WithFields(log.Fields{
-			"event": "game.StartGame",
-			"error": err,
-		}).Error("spring-dedicated isn't in the $PATH!")
-		//TODO tell players to go away
-		return
-	}
+	g.Script = script
 
-	wd, err := os.Getwd()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"event": "game.StartGame",
-			"error": err,
-		}).Error("couldn't get the working directory!")
-		//TODO tell players to go away
-		return
-	}
-
-	scriptFile := fmt.Sprintf("%s/%s/startscript.txt", wd, path)
-
-	cmd := &exec.Cmd{
-		Path: spring,
-		Args: []string{"", scriptFile},
-	}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"event": "game.StartGame",
-			"error": err,
-		}).Error("could not attach stdout pipe to spring-dedicated")
-		//TODO tell players to go away
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"event": "game.StartGame",
-			"error": err,
-		}).Error("could not attach stderr pipe to spring-dedicated")
-		//TODO tell players to go away
-		return
-	}
-
-	err = cmd.Start()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"event": "game.StartGame",
-			"error": err,
-		}).Error("spring-dedicated could not start!")
-		//TODO tell players to go away
-	}
-
-	stdoutScanner := bufio.NewScanner(stdout)
-	go func() {
-		for stdoutScanner.Scan() {
-			text := stdoutScanner.Text()
-			log.WithFields(log.Fields{
-				"event":    "spring",
-				"queue":    match.QueueName,
-				"match_id": match.Id,
-				"text":     text,
-			}).Debug("Spring stdout")
-		}
-	}()
-
-	stderrScanner := bufio.NewScanner(stderr)
-	go func() {
-		for stderrScanner.Scan() {
-			text := stderrScanner.Text()
-			log.WithFields(log.Fields{
-				"event":    "spring",
-				"queue":    match.QueueName,
-				"match_id": match.Id,
-				"text":     text,
-			}).Warn("Spring stderr")
-		}
-	}()
-
-	for _, p := range script.Players {
-		client.ConnectUser(p.Name, script.IP, script.Port, p.Password, script.Engine)
-	}
-
-	//TODO: set up the autohost interface listener
-	err = cmd.Wait()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"event": "game.StartGame",
-			"error": err,
-		}).Error("spring-dedicated exited with an error")
-	}
-
-	//TODO: game over, put players back in queue?
-	log.WithFields(log.Fields{
-		"event": "game.StartGame",
-	}).Info("game all done@!!!")
+	return nil
 }
 
-func generateStartScript(path string, script *startScript, match *queue.Match) error {
+func generateStartScript(path string, script *startScript) error {
 	tmpl, err := template.New("startScript").Parse(scriptTmpl)
 	if err != nil {
 		return fmt.Errorf("failed to compile template: %v", err)
@@ -244,6 +244,7 @@ func generateStartScript(path string, script *startScript, match *queue.Match) e
 
 var alphabet string = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!$%^&*()"
 
+// just a token so people can't spoof in a game. non-crypto rand is fine.
 func generatePassword() string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	password := make([]byte, 50)

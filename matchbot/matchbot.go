@@ -5,7 +5,6 @@ import (
 	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/kanatohodets/go-match/matchbot/queue"
-	"github.com/kanatohodets/go-match/spring/game"
 	"github.com/kanatohodets/go-match/spring/lobby/client"
 	"github.com/kanatohodets/go-match/spring/lobby/protocol"
 	"io/ioutil"
@@ -184,7 +183,6 @@ func (m *Matchbot) addPlayers(raw []byte) {
 			"userNames": msg.UserNames,
 			"queueName": msg.Name,
 		}).Error("got a JOIN QUEUE request for a queue I don't know about")
-
 		m.client.JoinQueueDeny(
 			msg.Name,
 			msg.UserNames,
@@ -392,123 +390,4 @@ func (m *Matchbot) readyCheckResponse(raw []byte) {
 		ch <- &res
 	}
 	m.readyMut.RUnlock()
-}
-
-func (m *Matchbot) matchesToGames() {
-	for {
-		select {
-		case match := <-m.matches:
-			playerNames := make([]string, len(match.Players))
-			for i, player := range match.Players {
-				playerNames[i] = player.Name
-			}
-			// TODO: configurable timeout for user ready check
-			m.client.ReadyCheck(match.QueueName, playerNames, 10)
-
-			// Spawn a goroutine to represent this match.
-			m.readyMut.Lock()
-			m.readyID++
-			ch := make(chan *protocol.ReadyCheckResponse)
-			m.ready[m.readyID] = ch
-			// The goroutine will exit when m.shutdown is closed.
-			go m.readyCheckSpinner(m.readyID, match, ch)
-			m.readyMut.Unlock()
-
-		case <-m.shutdown:
-			return
-		}
-	}
-}
-
-func (m *Matchbot) readyCheckSpinner(id uint32, match *queue.Match, ch chan *protocol.ReadyCheckResponse) {
-	playerNames := make([]string, len(match.Players))
-	playerReadyStatus := make(map[string]bool)
-	requiredReady := len(match.Players)
-	seenReady := 0
-	for i, player := range match.Players {
-		playerNames[i] = player.Name
-		playerReadyStatus[player.Name] = false
-	}
-
-	log.WithFields(log.Fields{
-		"event":    "matchbot.readyCheckSpinner",
-		"queue":    match.QueueName,
-		"match_id": match.Id,
-		"players":  playerNames,
-	}).Info("Entering readyCheck spinner")
-
-Listen:
-	for {
-		select {
-		case readyCheck := <-ch:
-			if readyCheck.Name != match.QueueName {
-				continue
-			}
-
-			readied, ok := playerReadyStatus[readyCheck.UserName]
-			if !ok {
-				log.Info("got a ready for a player we don't care about")
-				continue
-			}
-
-			log.WithFields(log.Fields{
-				"event":           "matchbot.readyCheckSpinner",
-				"player":          readyCheck.UserName,
-				"status":          readyCheck.Response,
-				"queue":           match.QueueName,
-				"match_id":        match.Id,
-				"already_readied": readied,
-			}).Debug("got a readycheck response")
-
-			if readyCheck.Response != "ready" {
-				m.client.ReadyCheckResult(
-					match.QueueName,
-					playerNames,
-					fmt.Sprintf("%s responded with status %s", readyCheck.UserName, readyCheck.Response),
-				)
-
-				break Listen
-			}
-
-			// protect against a single player sending 'ready' many times
-			if !readied {
-				seenReady++
-				playerReadyStatus[readyCheck.UserName] = true
-			}
-
-			if seenReady == requiredReady {
-				log.WithFields(log.Fields{
-					"event":    "matchbot.readyCheckSpinner",
-					"queue":    match.QueueName,
-					"match_id": match.Id,
-					"players":  playerNames,
-				}).Info("ready check complete, starting game")
-
-				m.client.ReadyCheckResult(
-					match.QueueName,
-					playerNames,
-					"pass",
-				)
-
-				go game.StartGame(m.client, match)
-				break Listen
-			}
-
-		case <-m.shutdown:
-			break Listen
-		case <-time.After(10 * time.Second):
-			log.Info("a ready check timed out")
-			m.client.ReadyCheckResult(
-				match.QueueName,
-				playerNames,
-				"timeout waiting for players to ready up",
-			)
-
-			break Listen
-		}
-	}
-
-	m.readyMut.Lock()
-	delete(m.ready, id)
-	m.readyMut.Unlock()
 }
